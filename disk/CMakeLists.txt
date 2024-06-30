@@ -1,10 +1,8 @@
 add_library(disk src/disk.cpp
-        src/fileControlBlock.cpp
-        src/fileInfo.cpp
-        src/directoryInfo.cpp
-        include/Disk/fileInfo.hpp
-        include/Disk/directoryInfo.hpp
-        include/Disk/fileControlBlock.hpp
+        src/dir.cpp
+        include/Disk/dir.hpp
+        include/Disk/indexNode.hpp
+        src/indexNode'.cpp
 )
 
 target_include_directories(disk PRIVATE include)

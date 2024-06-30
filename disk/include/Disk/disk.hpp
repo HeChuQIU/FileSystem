@@ -5,44 +5,46 @@
 #ifndef FILESYSTEM_DISK_HPP
 #define FILESYSTEM_DISK_HPP
 
-#include <vector>
+#include <array>
 #include <memory>
+#include <utility>
 #include <fstream>
-#include "Disk/fileControlBlock.hpp"
+#include <vector>
+#include <vector>
+#include "dir.hpp"
 
 class Disk {
-private:
-    int blockNum;
-    std::vector<char> bitmap;
-    std::fstream file;
-    int rootDirAddr;
-
 public:
-    explicit Disk(int blockNum, std::fstream &&file);
+    Disk() = default;
 
-    explicit Disk(std::fstream &&file);
+    Disk(std::unique_ptr<std::fstream> file);
 
-    ~Disk();
+    const static int BLOCK_SIZE;
+    const static int BLOCK_COUNT = 128;
+    const static int MAX_DIR_ITEM_NAME_LENGTH;
+    const static int MAX_FILE_NAME_LENGTH;
+    const static int MAX_USER_NAME_LENGTH;
+private:
+    std::unique_ptr<std::fstream> file;
+    std::array<int, BLOCK_COUNT> fileAllocationTable = {-1};
+    std::vector<int> freeBlock;
+    Dir rootDir;
 
-    std::stringstream Serialize();
+    std::string ReadBlock(int blockIndex);
 
-    static int BlockSizeByByte();
+    void WriteBlock(int blockIndex, const std::string &content);
 
-    int BlockNum();
+    int SolveDirAddress(const std::string &path);
 
-    void WriteBlock(int blockAddr, std::stringstream);
+    Dir GetDirFromAddress(int address);
 
-    std::stringstream ReadBlock(int blockAddr);
+    std::vector<std::string> Split(const std::string &str, char delimiter);
 
-    std::shared_ptr<FileControlBlock> RootDir();
+    std::vector<int> AllocateBlock(int blockNum);
 
-    static bool IsValidUserName(const std::string &userName);
+    void FreeBlock(std::vector<int> blockIndexList);
 
-    static bool IsValidFileOrDirName(const std::string &name);
-
-    static int MaxFileNumberInDir();
-
-    static int MaxFileSizeOf(IndirectFlag indirectFlag);
+    void MakeDir(const std::string &path);
 };
 
 #endif //FILESYSTEM_DISK_HPP

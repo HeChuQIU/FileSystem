@@ -2,117 +2,107 @@
 // Created by HeChu on 24-6-28.
 //
 
-#include <vector>
-#include <stdexcept>
+#include <array>
 #include <fstream>
 #include <memory>
+#include <map>
+#include <vector>
 #include <sstream>
-#include "Disk/fileControlBlock.hpp"
+#include "Disk/dir.hpp"
+
 
 class Disk {
-private:
-    int blockNum;
-    std::vector<char> bitmap;
-    std::fstream file;
-    int rootDirAddr = 1;
-
 public:
-    Disk(int blockNum, std::fstream &&file) : file(std::move(file)) {
-        if (blockNum <= 0) {
-            throw std::invalid_argument("blockSize and blockNum must be positive");
+    Disk() = default;
+
+    Disk(std::unique_ptr<std::fstream> file) : file(std::move(file)) {}
+
+    const static int BLOCK_SIZE = 1024;
+    const static int BLOCK_COUNT = 128;
+    const static int MAX_DIR_ITEM_NAME_LENGTH = 12;
+    const static int MAX_FILE_NAME_LENGTH = 16;
+    const static int MAX_USER_NAME_LENGTH = 16;
+private:
+    std::unique_ptr<std::fstream> file;
+    std::array<int, BLOCK_COUNT> fileAllocationTable = {-1};
+    std::vector<int> freeBlock;
+    Dir rootDir;
+
+    std::string ReadBlock(int blockIndex) {
+        file->seekg(blockIndex * BLOCK_SIZE);
+        char buffer[BLOCK_SIZE];
+        file->read(buffer, BLOCK_SIZE);
+        return buffer;
+    }
+
+    void WriteBlock(int blockIndex, const std::string &content) {
+        if (content.size() > BLOCK_SIZE) throw std::runtime_error("content size exceeds block size");
+        file->seekp(blockIndex * BLOCK_SIZE);
+        file->write(content.c_str(), BLOCK_SIZE);
+    }
+
+    int SolveDirAddress(const std::string &path) {
+        std::vector<std::string> pathList = Split(path, '/');
+        Dir currentDir = rootDir;
+        for (const auto &dirName: pathList) {
+            if (currentDir.dirItemMap.find(dirName + '/') == currentDir.dirItemMap.end()) {
+                return -1;
+            }
         }
-        if (blockNum % 8 != 0) {
-            throw std::invalid_argument("blockSize must be a multiple of 8");
+        return currentDir.dirItemMap[pathList.back()];
+    }
+
+    Dir GetDirFromAddress(int address) {
+        file->seekg(address * BLOCK_SIZE);
+        char buffer[BLOCK_SIZE];
+        file->read(buffer, BLOCK_SIZE);
+        return Dir(std::string(buffer));
+    }
+
+    std::vector<std::string> Split(const std::string &str, char delimiter) {
+        std::vector<std::string> tokens;
+        std::string token;
+        std::istringstream tokenStream(str);
+        while (std::getline(tokenStream, token, delimiter)) {
+            tokens.push_back(token);
         }
-        auto maxBlockNum = BlockSizeByByte() - sizeof(blockNum) - bitmap.size();
-        if (blockNum > maxBlockNum) {
-            throw std::invalid_argument("blockNum can't be larger than " + std::to_string(maxBlockNum));
+        return tokens;
+    }
+
+    std::vector<int> AllocateBlock(int blockNum) {
+        std::vector<int> blockList;
+        for (int i = 0; i < BLOCK_COUNT; i++) {
+            if (fileAllocationTable[i] == -1) {
+                blockList.push_back(i);
+                if (blockList.size() == blockNum) {
+                    break;
+                }
+            }
         }
-
-        this->blockNum = blockNum;
-        this->bitmap = std::vector<char>(blockNum / 8, 0);
-    }
-
-    Disk(std::fstream &&file) : file(std::move(file)) {
-        file.read(reinterpret_cast<char *>(&blockNum), sizeof(blockNum));
-        bitmap = std::vector<char>(blockNum / 8, 0);
-        file.read(bitmap.data(), bitmap.size());
-    }
-
-    ~Disk() {
-        file.close();
-    }
-
-    // 序列化这个实例的信息
-    std::stringstream Serialize() {
-        std::stringstream data;
-        data.write(reinterpret_cast<char *>(&blockNum), sizeof(blockNum));
-        data.write(bitmap.data(), bitmap.size());
-        return data;
-    }
-
-    static int BlockSizeByByte() {
-        return 1024;
-    }
-
-    int BlockNum() {
-        return blockNum;
-    }
-
-    void WriteBlock(int blockAddr, std::stringstream data) {
-        if (blockAddr < 0 || blockAddr >= blockNum) {
-            throw std::invalid_argument("blockAddr out of range");
+        if (blockList.size() < blockNum) {
+            throw std::runtime_error("no enough free block");
         }
-        if (data.str().size() > BlockSizeByByte()) {
-            throw std::invalid_argument("data too large");
+        return blockList;
+    }
+
+    void FreeBlock(std::vector<int> blockIndexList) {
+        for (int blockIndex: blockIndexList) {
+            fileAllocationTable[blockIndex] = -1;
+            freeBlock.push_back(blockIndex);
         }
-
-        file.seekp(blockAddr * BlockSizeByByte());
-        file << data.rdbuf();
-        file.flush();
     }
 
-    std::stringstream ReadBlock(int blockAddr) {
-        if (blockAddr < 0 || blockAddr >= blockNum) {
-            throw std::invalid_argument("blockAddr out of range");
-        }
-
-        file.seekg(blockAddr * BlockSizeByByte());
-        std::vector<char> buffer(BlockSizeByByte());
-        file.read(buffer.data(), BlockSizeByByte());
-
-        std::stringstream data;
-        data.write(buffer.data(), BlockSizeByByte());
-        return data;
-    }
-
-    std::shared_ptr<FileControlBlock> RootDir(){
-        FileControlBlock(ReadBlock(rootDirAddr));
-    }
-
-    static bool IsValidUserName(const std::string &userName) {
-        return userName.size() <= 8;
-    }
-
-    static bool IsValidFileOrDirName(const std::string &name) {
-        return name.size() <= 8;
-    }
-
-    static int MaxFileNumberInDir() {
-        return BlockSizeByByte() / (8 + sizeof(int)) - 2;
-    }
-
-    static int MaxFileSizeOf(IndirectFlag indirectFlag) {
-        int maxAddrInBlock = BlockSizeByByte() / sizeof(int);
-        switch (indirectFlag) {
-            case IndirectFlag::DIRECT:
-                return 10 * BlockSizeByByte();
-            case IndirectFlag::INDIRECT:
-                return BlockSizeByByte() * maxAddrInBlock;
-            case IndirectFlag::DOUBLE_INDIRECT:
-                return BlockSizeByByte() * maxAddrInBlock * maxAddrInBlock;
-            case IndirectFlag::TRIPLE_INDIRECT:
-                return BlockSizeByByte() * maxAddrInBlock * maxAddrInBlock * maxAddrInBlock;
+    void MakeDir(const std::string &path){
+        std::vector<std::string> pathList = Split(path, '/');
+        Dir currentDir = rootDir;
+        for (const auto &dirName: pathList) {
+            if (currentDir.dirItemMap.find(dirName + '/') == currentDir.dirItemMap.end()) {
+                int address = AllocateBlock(1)[0];
+                currentDir.AddDirItem(dirName + '/', address);
+                currentDir = GetDirFromAddress(address);
+            }
         }
     }
 };
+
+
